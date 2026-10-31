@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thai Travel Assistant</title>
+<style>
+  :root { --bg:#f7f6f2; --card:#fff; --ink:#1d1d1b; --muted:#6b6a65; --accent:#0f766e; --line:#e4e2db; --warn:#b45309; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .9rem; }
+  form { display:flex; gap:8px; }
+  input { flex:1; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .examples { margin:10px 0 20px; font-size:.85rem; color:var(--muted); }
+  .examples a { color:var(--accent); cursor:pointer; margin-right:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+  .step { font: 13px/1.45 ui-monospace, Consolas, monospace; color: var(--muted); white-space: pre-wrap; border-left: 3px solid var(--line); padding: 4px 10px; margin: 6px 0; }
+  .step b { color: var(--ink); }
+  .answer { font-size: 1.05rem; }
+  .cite { display:block; font-size:.85rem; color:var(--muted); margin-top:8px; }
+  .cite code { color: var(--accent); }
+  .err { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Thai Travel Assistant</h1>
+  <p class="sub">An agent that searches 15 Wikivoyage guides, does arithmetic with a sandboxed calculator, and cites its sources.</p>
+  <form id="f">
+    <input id="q" autocomplete="off" placeholder="e.g. How do I get from Bangkok to Ayutthaya by train?" required minlength="3" maxlength="500">
+    <button id="go">Ask</button>
+  </form>
+  <div class="examples">Try:
+    <a>How do I get to Ko Tao from Chumphon?</a>
+    <a>What is the entrance fee for Wat Mahathat in Ayutthaya?</a>
+    <a>Is there a ski resort in Pai?</a>
+  </div>
+  <div id="out"></div>
+</main>
+<script>
+const out = document.getElementById("out"), q = document.getElementById("q"), go = document.getElementById("go");
+document.querySelectorAll(".examples a").forEach(a => a.onclick = () => { q.value = a.textContent; });
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
+
+function render(ev, steps, card) {
+  if (ev.type === "action") {
+    const a = ev.action, line = el("div", "step");
+    line.innerHTML = `<b>step ${ev.step} · ${a.action}</b> `;
+    line.append(a.action === "search" ? `"${a.query}"${a.destination ? " in " + a.destination : ""}`
+              : a.action === "calculate" ? a.expression : "");
+    steps.append(line);
+  } else if (ev.type === "observation") {
+    steps.append(el("div", "step", ev.hits.length ? `→ ${ev.hits.length} results: ${ev.hits.join(", ")}` : `→ ${ev.text.slice(0, 160)}`));
+  } else if (ev.type === "final") {
+    const r = ev.result;
+    card.append(el("div", "answer", r.answer));
+    r.citations.forEach(c => {
+      const s = el("span", "cite"); s.innerHTML = `<code>[${c.id}]</code> `; s.append(`${c.destination} › ${c.section}: ${c.snippet.slice(0, 140)}…`);
+      card.append(s);
+    });
+    if (r.dropped_citations.length) card.append(el("span", "cite err", `dropped unretrieved citations: ${r.dropped_citations.join(", ")}`));
+  } else if (ev.type === "error") {
+    card.append(el("div", "err", ev.message));
+  }
+}
+
+document.getElementById("f").onsubmit = async (e) => {
+  e.preventDefault();
+  go.disabled = true;
+  const card = el("div", "card"), steps = el("div");
+  card.append(el("div", "", "Q: " + q.value), steps);
+  out.prepend(card);
+  try {
+    const resp = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ question: q.value }) });
+    const reader = resp.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (line.startsWith("data: ")) render(JSON.parse(line.slice(6)), steps, card);
+      }
+    }
+  } catch (err) { card.append(el("div", "err", String(err))); }
+  go.disabled = false;
+};
+</script>
+</body>
+</html>

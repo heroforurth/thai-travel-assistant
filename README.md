@@ -71,7 +71,32 @@ for every chunk size.
 
 ## Results
 
-See [eval/results/retrieval.md](eval/results/retrieval.md), [eval/results/min_score.md](eval/results/min_score.md),
+**Retrieval** (27 answerable questions, chunk size 400):
+
+| Retriever | Hit@1 | Recall@5 | MRR |
+|---|---|---|---|
+| BM25 (baseline) | 0.56 | 0.85 | 0.67 |
+| Dense (bge-m3) | 0.74 | 1.00 | 0.86 |
+| **Hybrid (used)** | **0.78** | **1.00** | **0.85** |
+
+**End-to-end** (33 questions, keyword accuracy):
+
+| System | All | Lookup | Calc | Unanswerable | Cited support |
+|---|---|---|---|---|---|
+| Closed-book (baseline) | 0.27 | 0.18 | 0.20 | 0.67 | 0.00 |
+| Single-shot RAG (baseline) | 0.97 | 1.00 | 0.80 | 1.00 | 0.96 |
+| Agent v1 | 0.85 | 0.86 | 0.60 | 1.00 | 0.67 |
+| **Agent (current)** | **0.97** | 0.95 | **1.00** | 1.00 | 0.96 |
+
+**How the defaults were chosen (measured improvements):**
+
+- **Chunk size:** 400 rather than 800 raises hybrid Hit@1 from 0.70 to 0.78.
+- **min_score = 0.60:** with no floor, all 6 unanswerable questions get junk context. At 0.60, half of them get none, and every answerable question keeps its evidence.
+- **Agent fixes:** agent v1 → current raised accuracy from 0.85 to 0.97. The fixes were a destination prefix on searches, recovering inline citations, and a stricter calculator rule.
+
+These choices were tuned on the same 33 questions, so the numbers are optimistic. See the report's limitations section.
+
+Details: [eval/results/retrieval.md](eval/results/retrieval.md), [eval/results/min_score.md](eval/results/min_score.md),
 [eval/results/answers.md](eval/results/answers.md) and the report in [report/](report/).
 
 ## Layout

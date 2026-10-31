@@ -7,3 +7,4 @@ index/
 report/*.aux
 report/*.log
 report/report.html
+eval/results/*.log

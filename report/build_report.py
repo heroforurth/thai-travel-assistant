@@ -71,27 +71,35 @@ def retrieval_section() -> str:
     rows = read_csv("retrieval.csv")
     if not rows:
         return pending("python -m eval.eval_retrieval")
-    num = lambda r, k: float(r[k])  # noqa: E731
-    plain = [r for r in rows if "filter" not in r["retriever"]]
-    best = max(plain, key=lambda r: (num(r, "recall@5"), num(r, "mrr@10")))
-    bm = [r for r in rows if r["retriever"] == "bm25" and r["chunk_size"] == best["chunk_size"]][0]
-    out = table(rows, bold_row=lambda r: r is best)
-    out += (f"<p>The best configuration without a filter is <b>{best['retriever']}</b> at chunk size "
-            f"<b>{best['chunk_size']}</b>, with Recall@5 = {fmt(best['recall@5'])} and MRR = {fmt(best['mrr@10'])}. "
-            f"The BM25 baseline at the same chunk size gets Recall@5 = {fmt(bm['recall@5'])} and MRR = {fmt(bm['mrr@10'])}.</p>")
-    sizes = sorted({int(r["chunk_size"]) for r in plain})
-    by = {(int(r["chunk_size"]), r["retriever"]): r for r in plain}
-    line = ", ".join(f"{s}: {fmt(by[(s, best['retriever'])]['mrr@10'])}" for s in sizes if (s, best["retriever"]) in by)
-    out += (f"<p><b>Chunk size</b> ({best['retriever']}, MRR by size): {line}. This is a trade-off: smaller chunks "
-            "give sharper vectors but can cut a fact off from its context, while larger chunks keep the context "
-            f"but mix several topics into one chunk. The app uses <code>CHUNK_SIZE={config.CHUNK_SIZE}</code>, "
-            "the size with the best Recall@5 (ties broken by MRR).</p>")
+    by = {(int(r["chunk_size"]), r["retriever"]): r for r in rows}
+    chosen = by.get((config.CHUNK_SIZE, config.RETRIEVER))
+    bm = by.get((config.CHUNK_SIZE, "bm25"))
+    out = table(rows, bold_row=lambda r: r is chosen)
+    if chosen and bm:
+        out += (f"<p><b>Baseline vs. chosen.</b> At chunk size {config.CHUNK_SIZE}, the BM25 baseline gets "
+                f"Recall@5 = {fmt(bm['recall@5'])} and MRR = {fmt(bm['mrr@10'])}. The app's retriever "
+                f"(<b>{config.RETRIEVER}</b>, highlighted) gets Recall@5 = {fmt(chosen['recall@5'])} and "
+                f"MRR = {fmt(chosen['mrr@10'])}. BM25 alone misses questions phrased differently from the guide. "
+                "For example, \"How much does the minivan from Chiang Mai to Pai cost?\" against the guide's "
+                "\"Minivans (150 baht)\" (q06, c05).</p>")
+    sizes = sorted({int(r["chunk_size"]) for r in rows})
+    line = "; ".join(f"{s}: Hit@1 {fmt(by[(s, config.RETRIEVER)]['hit@1'])}, MRR {fmt(by[(s, config.RETRIEVER)]['mrr@10'])}"
+                     for s in sizes if (s, config.RETRIEVER) in by)
+    out += (f"<p><b>Chunk size</b> ({config.RETRIEVER}): {line}. Smaller chunks rank the exact passage higher, and at "
+            "1500 characters dense retrieval drops to Recall@5 = "
+            f"{fmt(by[(1500, 'dense')]['recall@5'])} because one vector has to cover several topics. "
+            f"The first version of this app used 800. This table is why it now uses <code>CHUNK_SIZE={config.CHUNK_SIZE}</code>. "
+            "Dense and hybrid search are within one question of each other at 400 (MRR 0.858 vs 0.852). We kept "
+            "hybrid because it has the best Hit@1, and BM25 helps with exact names and numbers.</p>")
     filt = [r for r in rows if "filter" in r["retriever"]]
     if filt:
-        out += (f"<p><b>Query construction.</b> When the search is also filtered to the correct destination "
-                f"(the agent's <code>destination</code> argument), Recall@5 is {fmt(filt[0]['recall@5'])} and MRR is "
-                f"{fmt(filt[0]['mrr@10'])}. This is an upper bound for what the filter adds, since it assumes "
-                "the agent picks the right destination.</p>")
+        base = by[(int(filt[0]["chunk_size"]), "hybrid")]
+        effect = ("adds nothing measurable here: every relevant chunk already ranks in the top 5"
+                  if filt[0]["hit@1"] == base["hit@1"] and filt[0]["mrr@10"] == base["mrr@10"]
+                  else f"changes Hit@1 from {fmt(base['hit@1'])} to {fmt(filt[0]['hit@1'])}")
+        out += (f"<p><b>Query construction.</b> Filtering to the correct destination (the agent's "
+                f"<code>destination</code> argument) at size {filt[0]['chunk_size']} {effect}. Its benefit is "
+                "untested on this set, which has no questions where two guides compete.</p>")
     return out
 
 
@@ -99,36 +107,89 @@ def min_score_section() -> str:
     rows = read_csv("min_score.csv")
     if not rows:
         return pending("python -m eval.eval_retrieval")
-    best = max(rows, key=lambda r: (float(r["balanced"]), -float(r["min_score"])))
     img = RESULTS / "min_score.png"
     fig = (f'<figure><img src="data:image/png;base64,{base64.b64encode(img.read_bytes()).decode()}">'
            "<figcaption>Figure 2: The min_score trade-off. A higher floor rejects more unanswerable questions "
            "but also drops real evidence.</figcaption></figure>") if img.exists() else ""
-    zero = rows[0]
-    return (fig + table(rows, bold_row=lambda r: r is best) +
-            f"<p>The naive default is no floor. With no floor, retrieval always returns 5 chunks, so the model is "
-            f"handed junk context for all 6 unanswerable questions. The sweep's lowest floor ({fmt(zero['min_score'])}) "
-            f"already rejects {fmt(zero['unanswerable_rejected'])} of them. The best balanced value is "
-            f"<b>min_score = {fmt(best['min_score'])}</b>: it keeps evidence for {fmt(best['answerable_kept'])} of "
-            f"answerable questions and rejects {fmt(best['unanswerable_rejected'])} of unanswerable ones. "
-            f"The app's floor is set to <code>MIN_SCORE={config.MIN_SCORE}</code>. With only 6 unanswerable "
-            "questions, each one moves the rejection rate by 0.17, so this choice is coarse.</p>")
+    chosen = min(rows, key=lambda r: abs(float(r["min_score"]) - config.MIN_SCORE))
+    best_bal = max(rows, key=lambda r: float(r["balanced"]))
+    return (fig + table(rows, bold_row=lambda r: r is chosen) +
+            "<p><b>Naive default vs. chosen.</b> With no floor (or any floor up to 0.55), retrieval always returns "
+            "5 chunks, so the model is handed unrelated text for <b>all 6</b> unanswerable questions and has to resist "
+            "it on its own. Our rule was: <i>the highest floor that still keeps the evidence for every answerable "
+            f"question</i>. That gives <b>min_score = {fmt(chosen['min_score'])}</b>, which rejects "
+            f"{fmt(chosen['unanswerable_rejected'])} of unanswerable questions while keeping "
+            f"{fmt(chosen['answerable_kept'])} of answerable ones. {fmt(best_bal['min_score'])} has a marginally "
+            f"higher balanced score ({fmt(best_bal['balanced'])} vs {fmt(chosen['balanced'])}), but it drops real "
+            f"evidence for {1 - float(best_bal['answerable_kept']):.0%} of answerable questions. For a travel app, "
+            "a wrong \"I don't know\" is worse than letting the model see some junk it can still reject. "
+            "With only 6 unanswerable questions, each one moves the rejection rate by 0.17, so this choice is "
+            "coarse.</p>")
 
 
 def answers_section() -> str:
     rows = read_csv("answers.csv")
     if not rows:
         return pending("python -m eval.eval_answers")
+    by = {r["system"]: r for r in rows}
     out = table(rows, bold_row=lambda r: r["system"] == "agent")
+    if {"closed_book", "single_shot", "agent", "agent_v1"} <= set(by):
+        cb, ss, v1, ag = by["closed_book"], by["single_shot"], by["agent_v1"], by["agent"]
+        out += (f"<p><b>Retrieval is what matters most.</b> Closed-book gets {fmt(cb['accuracy (all 33)'])}: it invents "
+                "plausible prices and distances, and it confidently answers 2 of the 6 unanswerable questions. Any "
+                "grounded system scores above 0.85.</p>"
+                f"<p><b>Agent vs. single-shot RAG.</b> After the fixes in §5, the agent ties single-shot on overall "
+                f"accuracy ({fmt(ag['accuracy (all 33)'])} vs {fmt(ss['accuracy (all 33)'])}). It wins on arithmetic "
+                f"({fmt(ag['acc calc'])} vs {fmt(ss['acc calc'])}), because single-shot has no calculator and sometimes "
+                f"refuses to multiply. It loses one lookup (q19, §5). It costs about 2× the latency "
+                f"({fmt(ag['avg sec'])} s vs {fmt(ss['avg sec'])} s) and about 2 model calls per question. On this "
+                "test set, which is mostly single-hop questions, the agent's advantage is the calculator, not "
+                "multi-step search.</p>"
+                f"<p><b>agent_v1 → agent.</b> The first agent scored only {fmt(v1['accuracy (all 33)'])}, with "
+                f"{fmt(v1['false_abstain (27)'])} false abstentions and {fmt(v1['cited_support (27)'])} cited support. "
+                "§5 explains the three fixes. <b>Caveat:</b> these fixes were found by reading failures on this same "
+                "test set, so the agent's numbers are somewhat optimistic. A fresh held-out set is the main next step.</p>")
     recs = {r["system"]: read_jsonl(f"answers_{r['system']}.jsonl") for r in rows}
     agree = [(x["keyword_correct"], x["judge_correct"]) for rs in recs.values() if rs for x in rs
              if x["judge_correct"] is not None]
     if agree:
         rate = sum(a == b for a, b in agree) / len(agree)
-        out += (f"<p>The keyword metric and the LLM judge agree on {rate:.0%} of {len(agree)} graded answers. "
-                "We report keyword accuracy as the primary metric because it is deterministic. The judge is "
-                "the same small model being evaluated, so it is the less trustworthy of the two.</p>")
+        out += (f"<p><b>Metric reliability.</b> The keyword metric and the LLM judge agree on {rate:.0%} of "
+                f"{len(agree)} graded answers. Reading the disagreements, the judge (the same 4B model) mostly marks "
+                "correct answers wrong when they include extra detail. Examples are q10, q21 and c03: the answers "
+                "contain the right fact, and for c03 a correct calculation. We therefore treat keyword accuracy as the "
+                "primary metric.</p>")
     return out
+
+
+def _category(r: dict, tests: dict, index: Index) -> str:
+    ex = tests[r["id"]]
+    if r["stopped_by"] in ("parse_error", "max_steps"):
+        return f"loop ended by {r['stopped_by']}"
+    if ex["type"] == "unanswerable":
+        return "answered an unanswerable question"
+    hits = [h for step in r["trace"] for h in step.get("hits", [])]
+    found = any(h in index.by_id and is_relevant(index.by_id[h], ex) for h in hits)
+    if r["abstained"]:
+        return "abstained although evidence was retrieved" if found else "retrieval miss, then abstained"
+    if ex["type"] == "calc" and not any(s["action"]["action"] == "calculate" for s in r["trace"]):
+        return "skipped the calculator"
+    return "wrong/incomplete despite evidence" if found else "answered without retrieved evidence"
+
+
+def _fail_table(recs: list[dict], tests: dict, index: Index) -> str:
+    """Rows where the answer is wrong, or right but without a valid citation."""
+    rows = []
+    for r in recs:
+        if r["type"] == "unanswerable" and r["keyword_correct"]:
+            continue
+        if r["type"] != "unanswerable" and r["keyword_correct"] and r["cited_support"]:
+            continue
+        searches = [s["action"].get("query") for s in r["trace"] if s["action"]["action"] == "search"]
+        rows.append({"id": r["id"], "question": r["question"], "gold": r["gold"], "agent answer": r["answer"][:200],
+                     "searches": " | ".join(q for q in searches if q) or "-",
+                     "category": _category(r, tests, index) if not r["keyword_correct"] else "correct, but no valid citation"})
+    return table(rows) if rows else "<p>None.</p>"
 
 
 def failure_section() -> str:
@@ -137,30 +198,38 @@ def failure_section() -> str:
         return pending("python -m eval.eval_answers --systems agent")
     index = Index.build()
     tests = {ex["id"]: ex for ex in load_testset()}
-
-    def category(r: dict) -> str:
-        ex = tests[r["id"]]
-        if r["stopped_by"] in ("parse_error", "max_steps"):
-            return f"loop ended by {r['stopped_by']}"
-        if ex["type"] == "unanswerable":
-            return "answered an unanswerable question"
-        hits = [h for step in r["trace"] for h in step.get("hits", [])]
-        found = any(h in index.by_id and is_relevant(index.by_id[h], ex) for h in hits)
-        if r["abstained"]:
-            return "abstained although evidence was retrieved" if found else "retrieval miss, then abstained"
-        return "wrong/incomplete despite evidence" if found else "answered without retrieved evidence"
-
-    fails = [r for r in recs if not r["keyword_correct"]]
-    if not fails:
-        return "<p>The agent answered every question correctly under the keyword metric.</p>"
-    cats = collections.Counter(category(r) for r in fails)
-    out = "<p>Agent failures by category: " + ", ".join(f"{c} ({n})" for c, n in cats.most_common()) + ".</p>"
-    rows = []
-    for r in fails:
-        searches = [s["action"].get("query") for s in r["trace"] if s["action"]["action"] == "search"]
-        rows.append({"id": r["id"], "question": r["question"], "gold": r["gold"], "agent answer": r["answer"][:220],
-                     "searches": " | ".join(q for q in searches if q) or "-", "category": category(r)})
-    return out + table(rows)
+    out = ""
+    v1 = read_jsonl("answers_agent_v1.jsonl")
+    if v1:
+        out += ("<h3>5.1 What the first agent got wrong (agent_v1)</h3>"
+                "<p>Each row is a question agent_v1 got wrong, or answered correctly without a valid citation:</p>"
+                + _fail_table(v1, tests, index) +
+                "<p>Reading these traces showed three distinct causes. Each fix is in the code and covered by a unit test:</p><ol>"
+                "<li><b>The floor emptied the agent's own searches</b> (q02, q15, q19). The floor was tuned on full "
+                "questions, but the agent writes terse queries such as \"Songkran dates\". Chunks are embedded with a "
+                "\"Destination — Section:\" prefix, so these queries scored around 0.52 cosine against a 0.60 floor. "
+                "Every result was dropped, and the agent abstained. <i>Fix:</i> the search tool prefixes the "
+                "destination onto the query, which raises the top cosine to about 0.65–0.70. The agent is also told "
+                "to rephrase once before giving up.</li>"
+                "<li><b>Citations in the wrong place</b> (q05, q18, q20, q21). The model wrote ids inline "
+                "(\"…250 baht [ko-tao/stay-safe/6]\") or joined two ids in one string, leaving <code>citations</code> "
+                "empty. <i>Fix:</i> ids are now also recovered from the answer text. Only ids that were actually "
+                "retrieved in the run are accepted, so this cannot invent sources.</li>"
+                "<li><b>Skipped calculator</b> (c01, c05). The model stated the unit price and stopped. <i>Fix:</i> "
+                "a stricter prompt rule. A small model does not reliably follow \"use the tool for arithmetic\" unless "
+                "the rule names the trigger (people, nights, days, return trips).</li></ol>")
+    out += ("<h3>5.2 Remaining failures (current agent)</h3>" + _fail_table(recs, tests, index) +
+            "<p><b>q19, a real retrieval miss.</b> The chunk containing \"13-15 Apr\" is not in the top 5 for "
+            "\"Songkran dates\". The agent found \"mid-April\" in a different chunk (about Wat Phra Singh), judged that "
+            "good enough, and stopped searching. The answer is not wrong, but it is incomplete, and nothing in the "
+            "loop checks that the answer is as specific as the question. A reranker, or a self-check step (\"does the "
+            "evidence answer the exact question?\"), would target this.</p>"
+            "<p><b>An ambiguous gold label (q11 / c04).</b> The Ao Nang guide gives the Railay longtail fare as "
+            "both 100 baht (Understand) and 80 baht by day / 100 baht after 18:00 (Get in). Our label uses 100. "
+            "Answers quoting 80 baht are arguably correct. We did not change the label after seeing results. It "
+            "cost single-shot a judge point on q11, and it is why several answers hedge between the two fares. A "
+            "labelling pass with two annotators would catch this kind of conflict.</p>")
+    return out
 
 
 DIAGRAM = """<svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
@@ -175,7 +244,7 @@ DIAGRAM = """<svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg" font-
 <rect x="700" y="20" width="55" height="70" rx="6" fill="#f1f5f9" stroke="#64748b"/><text x="727" y="45" text-anchor="middle" font-size="10">BM25</text><text x="727" y="60" text-anchor="middle" font-size="10">+ bge-m3</text><text x="727" y="75" text-anchor="middle" font-size="10">RRF, floor</text>
 <rect x="535" y="110" width="105" height="50" rx="6" fill="#f1f5f9" stroke="#64748b"/><text x="587" y="132" text-anchor="middle">calculate</text><text x="587" y="148" text-anchor="middle" font-size="10">AST sandbox</text>
 <rect x="535" y="190" width="105" height="50" rx="6" fill="#f1f5f9" stroke="#64748b"/><text x="587" y="212" text-anchor="middle">final</text><text x="587" y="228" text-anchor="middle" font-size="10">answer + cites</text>
-<text x="215" y="215" text-anchor="middle" font-size="10" fill="#555">data/raw: 15 Wikivoyage guides</text><text x="215" y="230" text-anchor="middle" font-size="10" fill="#555">→ section-aware chunks (800/100)</text>
+<text x="215" y="215" text-anchor="middle" font-size="10" fill="#555">data/raw: 15 Wikivoyage guides</text><text x="215" y="230" text-anchor="middle" font-size="10" fill="#555">→ section-aware chunks (400/50)</text>
 </svg>"""
 
 
@@ -265,6 +334,7 @@ questions, the model must abstain to count as correct.</li>
 
 <h2>6. Limitations and next steps</h2>
 <ul>
+<li><b>Tuned on the test set.</b> The chunk size, the floor and the agent fixes were all chosen by looking at these 33 questions. There was no separate dev/test split, so every number here is optimistic. Next step: write 30 fresh questions and run them once, untouched.</li>
 <li><b>Small evaluation set.</b> With {len(tests)} questions (only {types['unanswerable']} unanswerable), one question moves accuracy by about 3 points, so differences of one or two questions are within noise. Next step: grow the set to 100+ questions, including questions written by other students.</li>
 <li><b>Stale facts.</b> Prices in the guides date from 2016–2025. The app reports what the guide says, not current prices. Next step: show each chunk's "updated" date next to its citation.</li>
 <li><b>Single-hop bias.</b> Most questions need one passage. Questions comparing destinations, such as "cheaper to reach: Ko Tao or Ko Samet?", are untested.</li>

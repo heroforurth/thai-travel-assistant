@@ -88,13 +88,23 @@ def test_agent_search_calculate_final(monkeypatch):
     script(monkeypatch, [
         json.dumps({"action": "search", "query": "Lomprayah fare", "destination": "Ko Tao"}),
         json.dumps({"action": "calculate", "expression": "750 * 4"}),
-        json.dumps({"action": "final", "answer": "3,000 baht.", "citations": ["ko-tao/get-in/2", "made-up/0"]}),
+        json.dumps({"action": "final", "answer": "3,000 baht.", "citations": ["ko-tao/get-in/2", "made-up/see/0"]}),
     ])
     res = agent.run("Two people round trip?", FakeIndex())
     assert res.stopped_by == "final" and res.steps == 3
     assert [c.id for c in res.citations] == ["ko-tao/get-in/2"]
-    assert res.dropped_citations == ["made-up/0"]  # never retrieved -> not shown as a source
+    assert res.dropped_citations == ["made-up/see/0"]  # never retrieved -> not shown as a source
     assert "750 * 4 = 3000" in res.trace[1]["observation"]
+
+
+def test_agent_recovers_inline_citations(monkeypatch):
+    script(monkeypatch, [
+        json.dumps({"action": "search", "query": "fare", "destination": "Ko Tao"}),
+        json.dumps({"action": "final", "answer": "750 baht [ko-tao/get-in/2] or [pai/see/1].", "citations": []}),
+    ])
+    res = agent.run("fare?", FakeIndex())
+    assert [c.id for c in res.citations] == ["ko-tao/get-in/2"]
+    assert res.dropped_citations == ["pai/see/1"]  # inline id that was never retrieved is not trusted
 
 
 def test_agent_repairs_one_bad_step(monkeypatch):

@@ -37,7 +37,7 @@ def single_shot(question: str, index: Index, *, mode: str = config.RETRIEVER) ->
         failures = 0
     except (ValueError, ValidationError, TypeError):
         final, failures = FinalAction(action="final", answer=reply or ABSTAIN, citations=[]), 1
-    cites, dropped = _citations(final.citations, {h.chunk.id: h for h in hits})
+    cites, dropped = _citations(final.citations, {h.chunk.id: h for h in hits}, final.answer)
     return AgentResult(question=question, answer=final.answer, citations=cites, steps=1, stopped_by="final",
                        parse_failures=failures, dropped_citations=dropped,
                        trace=[{"step": 1, "hits": [h.chunk.id for h in hits]}])

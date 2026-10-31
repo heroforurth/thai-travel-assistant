@@ -48,7 +48,11 @@ def format_hits(hits: list[Hit]) -> str:
 
 
 def run_search(index: Index, args: SearchAction) -> tuple[str, list[Hit]]:
-    hits = index.search(args.query, k=config.TOP_K, min_score=config.MIN_SCORE, destination=args.destination)
+    # Chunks are embedded as "Destination — Section: text", so a terse agent query like
+    # "Songkran dates" scores far below the min_score floor unless it carries the
+    # destination too (see report §5: this was agent v1's main failure).
+    query = f"{args.destination} — {args.query}" if args.destination else args.query
+    hits = index.search(query, k=config.TOP_K, min_score=config.MIN_SCORE, destination=args.destination)
     return f"<search_results>\n{format_hits(hits)}\n</search_results>", hits
 
 

@@ -116,7 +116,7 @@ def main() -> None:
         with open(path, encoding="utf-8") as f:
             old = [r for r in csv.DictReader(f) if r["system"] not in args.systems]
         summary = [{k: (float(v) if k != "system" else v) for k, v in r.items()} for r in old] + summary
-    order = {"closed_book": 0, "single_shot": 1, "agent": 2}
+    order = {"closed_book": 0, "single_shot": 1, "agent_v1": 2, "agent": 3}
     summary.sort(key=lambda r: order.get(r["system"], 9))
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(summary[0]))

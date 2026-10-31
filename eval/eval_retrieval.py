@@ -11,7 +11,7 @@ import csv
 
 import numpy as np
 
-from app import llm
+from app import config, llm
 from app.retrieve import Index
 from eval.common import RESULTS, is_relevant, load_testset, write_md
 
@@ -76,7 +76,7 @@ def main() -> None:
             rows.append({"chunk_size": size, "retriever": mode, **{k: v for k, v in r.items() if k != "misses@10"},
                          "misses@10": " ".join(r["misses@10"]) or "-"})
             print(rows[-1])
-        if not args.bm25_only and (size, overlap) == (800, 100):
+        if not args.bm25_only and (size, overlap) == (config.CHUNK_SIZE, config.CHUNK_OVERLAP):
             # Query construction: the agent can pass a destination filter. Upper bound
             # when the filter is right (oracle destination from the label).
             r = score(index, answerable, "hybrid", use_destination=True)
@@ -97,7 +97,7 @@ def main() -> None:
         w = csv.DictWriter(f, fieldnames=list(sweep[0]))
         w.writeheader()
         w.writerows(sweep)
-    print(write_md(RESULTS / "min_score.md", "min_score sweep (dense cosine, chunk 800)", sweep))
+    print(write_md(RESULTS / "min_score.md", f"min_score sweep (dense cosine, chunk {config.CHUNK_SIZE})", sweep))
 
     import matplotlib
     matplotlib.use("Agg")

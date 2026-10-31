@@ -18,11 +18,11 @@ CHAT_MODEL = os.getenv("CHAT_MODEL", "gemma-4-E4B-it")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 
 # Defaults chosen by the sweep in eval/eval_retrieval.py (see README / report).
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "400"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 RETRIEVER = os.getenv("RETRIEVER", "hybrid")  # dense | bm25 | hybrid
 TOP_K = int(os.getenv("TOP_K", "5"))
-MIN_SCORE = float(os.getenv("MIN_SCORE", "0.45"))  # dense-cosine floor per chunk
+MIN_SCORE = float(os.getenv("MIN_SCORE", "0.60"))  # dense-cosine floor per chunk
 
 MAX_STEPS = int(os.getenv("MAX_STEPS", "5"))
 

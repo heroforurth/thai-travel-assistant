@@ -6,3 +6,4 @@ index/
 .pytest_cache/
 report/*.aux
 report/*.log
+report/report.html
